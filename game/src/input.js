@@ -1,49 +1,88 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard and mouse state, read once a frame. Actions are edge-triggered:
+// takeActions returns the ones pressed since the last read, then clears them.
+import { KEYS } from './config.js';
 
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
+export const ACTION_ENTER = 4;
+export const ACTION_RELOAD = 8;
+export const ACTION_MUTE = 16;
+export const ACTION_CLICK = 32;
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
+export function createInput(canvas) {
+  const keys = new Set();
   let actions = 0;
+  const mouse = { x: 0, y: 0, down: false };
+
+  function codeToAction(code) {
+    if (KEYS.confirm.includes(code)) return ACTION_CONFIRM;
+    if (KEYS.pause.includes(code)) return ACTION_PAUSE;
+    if (KEYS.enterCar.includes(code)) return ACTION_ENTER;
+    if (KEYS.reload.includes(code)) return ACTION_RELOAD;
+    if (KEYS.mute.includes(code)) return ACTION_MUTE;
+    return 0;
+  }
 
   window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) {
+      event.preventDefault();
+    }
+    if (!event.repeat) actions |= codeToAction(event.code);
+    keys.add(event.code);
+  });
+  window.addEventListener('keyup', (event) => keys.delete(event.code));
+  window.addEventListener('blur', () => keys.clear());
+
+  canvas.addEventListener('mousemove', (event) => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+    mouse.y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+  });
+  canvas.addEventListener('mousedown', (event) => {
+    if (event.button === 0) {
+      mouse.down = true;
+      actions |= ACTION_CLICK;
+    }
+  });
+  window.addEventListener('mouseup', () => {
+    mouse.down = false;
+  });
+  // Touch: tap to confirm on menus, drag to aim on foot.
+  canvas.addEventListener('touchstart', (event) => {
+    const touch = event.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((touch.clientX - rect.left) / rect.width) * canvas.width;
+    mouse.y = ((touch.clientY - rect.top) / rect.height) * canvas.height;
+    mouse.down = true;
+    actions |= ACTION_CLICK;
     event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => {
+    mouse.down = false;
   });
 
+  function held(list) {
+    return list.some((code) => keys.has(code));
+  }
+
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
+    mouse,
     direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+      let x = 0;
+      let y = 0;
+      if (held(KEYS.left)) x -= 1;
+      if (held(KEYS.right)) x += 1;
+      if (held(KEYS.up)) y -= 1;
+      if (held(KEYS.down)) y += 1;
+      if (x !== 0 && y !== 0) {
+        x *= Math.SQRT1_2;
+        y *= Math.SQRT1_2;
+      }
+      return { x, y };
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
+    sprinting() {
+      return held(KEYS.sprint);
+    },
     takeActions() {
       const taken = actions;
       actions = 0;
